@@ -1,0 +1,7 @@
+.env
+mensajes_demo.db
+__pycache__/
+node_modules/
+indexviejo.js
+txt
+auth_info_baileys/
