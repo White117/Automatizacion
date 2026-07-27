@@ -106,14 +106,25 @@ async function connectToWhatsApp() {
         if (!m.message || m.key.fromMe) return;
 
         const remoteJid = m.key.remoteJid;
+        const remoteJidAlt = m.key.remoteJidAlt; // Intentamos capturar el identificador alternativo si existe
         
         let telefono = '';
-        if (remoteJid.endsWith('@s.whatsapp.net')) {
-            telefono = remoteJid.split('@')[0]; // Extrae el número de teléfono limpio y real
-        } else if (remoteJid.includes('@lid')) {
-            telefono = 'Dispositivo Vinculado (LID)';
+        
+        // Usamos la alternativa limpia si viene mapeada, de lo contrario procesamos el JID principal
+        const identificadorUtilizar = remoteJidAlt || remoteJid;
+
+        if (identificadorUtilizar.endsWith('@s.whatsapp.net')) {
+            telefono = identificadorUtilizar.split('@')[0];
+        } else if (identificadorUtilizar.includes('@lid')) {
+            // Intentamos extraer el mapeo interno de la sesión si está disponible
+            const pnAsociado = sock.signalRepository?.lidMapping?.getPNForLID?.(identificadorUtilizar);
+            if (pnAsociado) {
+                telefono = pnAsociado.split('@')[0];
+            } else {
+                telefono = identificadorUtilizar.split('@')[0]; // Guardamos el LID numérico limpio en lugar de un texto fijo
+            }
         } else {
-            telefono = remoteJid.split('@')[0];
+            telefono = identificadorUtilizar.split('@')[0];
         }
 
         const nombre = m.pushName || 'Desconocido';
