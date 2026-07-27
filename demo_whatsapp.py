@@ -15,7 +15,7 @@ load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "mensajes_demo.db")
 
-# --- CONFIGURACION DE CORREO (Seguras por variables de entorno) ---
+#  CONFIGURACIÓN DE CORREO ELECTRÓNICO 
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 CORREO_EMISOR = os.getenv("CORREO_EMISOR")
@@ -23,9 +23,8 @@ CONTRASENA_APP = os.getenv("CONTRASENA_APP")
 CORREO_DESTINATARIO = os.getenv("CORREO_DESTINATARIO")
 
 
-# --------------------------------
-
 def inicializar_db():
+    """Crea la tabla de mensajes con la columna 'procesado' si aún no existe."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -34,50 +33,58 @@ def inicializar_db():
             nombre TEXT,
             telefono TEXT,
             contenido TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            procesado INTEGER DEFAULT 0
         )
     """)
     conn.commit()
     conn.close()
 
+
 def limpiar_bd():
+    """Vacía todos los registros de la base de datos."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM mensajes")
     conn.commit()
     conn.close()
-    print("Base de datos limpiada con exito.")
+    print("\n[BD] Base de datos limpiada con éxito.")
+
 
 def ver_mensajes_actuales():
+    """Muestra por consola todos los mensajes y su estado de procesamiento."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, nombre, telefono, contenido, timestamp FROM mensajes")
+    cursor.execute("SELECT id, nombre, telefono, contenido, timestamp, procesado FROM mensajes")
     filas = cursor.fetchall()
     conn.close()
 
     if not filas:
-        print("\nNo hay mensajes guardados en la base de datos todavia.")
+        print("\nNo hay mensajes guardados en la base de datos todavía.")
         return
 
-    print(f"\n--- MENSAJES REALES EN LA BD ({len(filas)}) ---")
+    print(f"\n--- MENSAJES EN LA BD ({len(filas)}) ---")
     for f in filas:
         id_msg = f[0]
         nombre = f[1]
         telefono = f[2]
         contenido = f[3]
         timestamp = f[4]
+        procesado = "Sí" if f[5] == 1 else "No (Pendiente)"
         
-        print(f"[{id_msg}] De: {nombre} ({telefono}) | Fecha: {timestamp}")
+        print(f"[{id_msg}] De: {nombre} ({telefono}) | Fecha: {timestamp} | Procesado: {procesado}")
         print(f"    Contenido: {contenido}")
         print("-" * 40)
 
+
 def enviar_correo_reporte(cuerpo_reporte):
-    print("\nPreparando y enviando el correo electronico...")
+    """Envía el reporte generado por la IA a través del servidor SMTP de Gmail."""
+    print("\nPreparando y enviando el correo electrónico...")
     try:
         mensaje = MIMEMultipart()
         mensaje["From"] = CORREO_EMISOR
         mensaje["To"] = CORREO_DESTINATARIO
-        mensaje["Subject"] = "Reporte Ejecutivo Diario - WhatsApp Bot"
+        mensaje["Subject"] = "Reporte Ejecutivo de Nuevos Mensajes - WhatsApp Bot"
 
         mensaje.attach(MIMEText(cuerpo_reporte, "plain", "utf-8"))
 
@@ -88,53 +95,63 @@ def enviar_correo_reporte(cuerpo_reporte):
         servidor.quit()
 
         print("¡Correo enviado exitosamente a tu bandeja de entrada!")
+        return True
     except Exception as e:
         print(f"Error al enviar el correo: {e}")
+        return False
+
 
 def procesar_resumen_con_ollama():
+    """Consulta únicamente los mensajes pendientes (procesado = 0), los procesa 
+       con Ollama, envía el correo y marca esos mensajes como procesados (1).
+    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, nombre, telefono, contenido, timestamp FROM mensajes")
+    # Filtramos estrictamente los mensajes que aún no han sido enviados en ningún reporte
+    cursor.execute("SELECT id, nombre, telefono, contenido, timestamp FROM mensajes WHERE procesado = 0")
     filas = cursor.fetchall()
-    conn.close()
 
     if not filas:
-        print("No hay mensajes nuevos en la base de datos para analizar.")
+        print("\nNo hay mensajes nuevos pendientes para procesar.")
+        conn.close()
         return
 
-    # Mapeo corregido: id, nombre, telefono, contenido, timestamp
+    # Prepara la lista estructurada con los IDs para actualizar su estado después
     mensajes_lista = []
+    ids_a_marcar = []
+    
     for f in filas:
+        id_msg = f[0]
         nombre = f[1]
         telefono = f[2]
         contenido = f[3]
         timestamp = f[4]
         
+        ids_a_marcar.append(id_msg)
         mensajes_lista.append({
             "remitente": f"{nombre} ({telefono})",
             "contenido": contenido,
             "timestamp": timestamp
         })
 
-    print(f"\nAnalizando {len(mensajes_lista)} mensajes reales con Llama 3.1... por favor espera un momento...")
+    conn.close()
+
+    print(f"\nAnalizando {len(mensajes_lista)} mensajes nuevos con Llama 3.1... por favor espera...")
 
     prompt_sistema = """
 Eres un asistente ejecutivo de inteligencia artificial para una empresa. 
-Recibiras un listado en formato JSON de mensajes de WhatsApp recibidos durante el dia.
+Recibirás un listado en formato JSON de mensajes de WhatsApp nuevos recibidos recientemente.
 
 REGLAS DE CLASIFICACION ESTRICTAS:
-1. 🔴 URGENTE / CRITICO: Caidas de sistemas, errores graves, servidores caidos, emergencias o bloqueos.
-2. 🟡 OPORTUNIDADES COMERCIALES / VENTAS: Interes en precios, cotizaciones, compras o adquisicion de productos.
-3. 🟢 INFORMATIVO / OPERATIVO: Consultas reales de clientes, preguntas sobre procesos, horarios o avisos internos validos.
+1. 🔴 URGENTE / CRITICO: Caídas de sistemas, errores graves, servidores caídos, emergencias o bloqueos.
+2. 🟡 OPORTUNIDADES COMERCIALES / VENTAS: Interés en precios, cotizaciones, compras o adquisición de productos.
+3. 🟢 INFORMATIVO / OPERATIVO: Consultas reales de clientes, preguntas sobre procesos, horarios o avisos internos válidos.
 4. ⚪ SPAM / OTROS: Mensajes vacíos, pruebas de teclado aleatorias (como "asd", "123", letras al azar), cadenas, memes, bromas o publicidad.
 
 FORMATO DE SALIDA OBLIGATORIO:
 Devuelve el reporte manteniendo estrictamente los emojis y encabezados. 
 Para cada mensaje encontrado, NO muestres código JSON ni estructuras técnicas. Escríbelo de forma limpia y legible usando este formato exacto por cada línea:
 - "Contenido del mensaje" (Remitente: [número], Hora: [timestamp])
-
-Si una categoría no tiene mensajes, escribe exactamente:
-- No se encontraron mensajes en esta categoría.
 
 Sigue estrictamente este esquema:
 
@@ -156,7 +173,7 @@ Sigue estrictamente este esquema:
     prompt_usuario = json.dumps(mensajes_lista, indent=2, ensure_ascii=False)
     payload = {
         "model": "llama3.1",
-        "prompt": f"{prompt_sistema}\n\nMENSAJES A ANALIZAR:\n{prompt_usuario}",
+        "prompt": f"{prompt_sistema}\n\nMENSAJES NUEVOS A ANALIZAR:\n{prompt_usuario}",
         "stream": False
     }
 
@@ -171,25 +188,38 @@ Sigue estrictamente este esquema:
             print(resultado)
             print("="*50 + "\n")
 
-            enviar_correo_reporte(resultado)
+
+            correo_enviado = enviar_correo_reporte(resultado)
+            
+            if correo_enviado:
+                conn = sqlite3.connect(DB_NAME)
+                cursor = conn.cursor()
+                for id_msg in ids_a_marcar:
+                    cursor.execute("UPDATE mensajes SET procesado = 1 WHERE id = ?", (id_msg,))
+                conn.commit()
+                conn.close()
             
         else:
             print(f"Error en la respuesta de Ollama: {response.status_code}")
     except requests.exceptions.ConnectionError:
-        print("Error: Asegurate de que Ollama este abierto y ejecutandose.")
+        print("Error: Asegúrate de que Ollama esté abierto y ejecutándose.")
 
-# MENU INTERACTIVO DEMO 
+
 if __name__ == "__main__":
     inicializar_db()
+
+
+    # MODO MANUAL 
+
     
     while True:
-        print("\n--- MENU DE DEMOSTRACION WHATSAPP BOT ---")
-        print("1. Ver mensajes reales guardados en node")
-        print("2. Enviar por correo")
-        print("3. Limpiar db")
+        print("\n--- MENÚ DE DEMOSTRACIÓN WHATSAPP BOT (MANUAL) ---")
+        print("1. Ver mensajes en la BD (y su estado de procesamiento)")
+        print("2. Procesar únicamente los mensajes NUEVOS (Ollama + Correo)")
+        print("3. Limpiar base de datos")
         print("4. Salir")
         
-        opcion = input("Elige una opcion (1-4): ").strip()
+        opcion = input("Elige una opción (1-4): ").strip()
         
         if opcion == "1":
             ver_mensajes_actuales()
@@ -202,3 +232,12 @@ if __name__ == "__main__":
             break
         else:
             print("Opción no válida. Elige un número del 1 al 4.")
+    
+
+  
+     # MODO AUTOMÁTICO
+    
+    #schedule.every(2).minutes.do(procesar_resumen_con_ollama)
+    #while True:
+    #     schedule.run_pending()
+    #     time.sleep(1)
